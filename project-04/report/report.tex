@@ -32,6 +32,7 @@
 %
 %\usepackage{url}
 
+\usepackage[dvipsnames]{xcolor}
 
 % correct bad hyphenation here
 \hyphenation{op-tical net-works semi-conduc-tor}
@@ -118,7 +119,7 @@ results:
 \end{itemize} 
 
 
-\section{Inform the Driving Agent}
+\section{Inform the Driving Agent: Identify and Update State}
 
 \vspace{1em}
 \noindent Q: \textit{What states have you identified that are appropriate for
@@ -140,20 +141,25 @@ following variables to define the possible states:
 
 \begin{itemize}
 \item is light green (boolean)
-\item waypoint (4 possibilities)
-\item car oncoming and turning (boolean)
-\item car oncoming (boolean)
+\item waypoint (3 possibilities)
+\item car oncoming (4 possibilities: None, left, right, forward)
 \item car left (boolean)
-\item car right (boolean)
 \end{itemize}
 
 Considering the cardinality of the state variables outlined above, we have a
-total of $2^{5} * 4 = 128$ possible states to consider.  Notice that the main
-piece of information that I decided to leave out was related to the turning
-direction of other traffic at the intersection.  For cars coming from the left
-and right I completely ignored the turning direction. For oncoming cars I
-only differentiated between turning and not turning, and did not include the
-specific turning direction in the state.
+total of $2 * 3 * 4 * 2 = 48$ possible states to consider.  The most important
+piece of information that I have decided to leave out is whether or not there
+is a car coming from the right. Based on the U.S. Right-of-way rules, once
+the state of the light is known (red or green) the presence or absence of
+a car coming from the right has no effect on our decision to turn. 
+
+The second piece of information that has been deliberately left out of the
+implementation is the deadline information.  The cardinality of the deadline
+variable can very large (the deadline is set to 5 times the starting distance
+to the destination), and so including the deadline value in the state
+representation will dramatically increase the space we need to explore to 
+start reaping the benefits of the Q-matrix convergence.
+
 
 \vspace{1em}
 \noindent Optional: \textit{How many states in total exist for the smartcab in
@@ -167,17 +173,24 @@ a state representation as follows:
 
 \begin{itemize}
 \item light state (red or green)
-\item waypoint (4 possibilities)
+\item waypoint (3 possibilities)
 \item car on left (4 possibilities: None, turning left, turning right, going forward)
 \item car on right (4 possibilities)
 \item car oncoming (4 possibilities)
+\item deadline (on the order of at least 20 possibilities on average)
 \end{itemize}
 
-That makes up a total of 512 possible states.  Some of the states covered by
-these possibilities are much less likely to occur than others.  Q-learning 
-will take longer to converge if there are states that are not really seen very
-often in practice.  A better approach is to consider a subset of only the most
+That makes up a total of 2 * 3 * 4 * 4 * 4 * 20 = 7680 possible states!!  Some
+of the states covered by these possibilities are much less likely to occur than
+others, and Q-learning will take a lot longer to converge if there are states
+that are not really seen very often in practice.  As was outlined in the
+previous section, a better approach is to consider a subset of only the most
 significant states to allow for faster convergence of the Q-learning algorithm.
+
+Another possible approach that might help with large cardinality variables such
+as the deadline would be to define just a few categories to bin the variable
+values into.  For example one can boil it down to deadline being
+\textit{urgent} or \textit{not-urgent} depending on a threshold value. 
 
 \section{Implement a Q-Learning Driving Agent}
 
@@ -195,19 +208,24 @@ The learning rate was given the dependency
     \alpha_{t} = \alpha_{0} \Theta / (\Theta + t)
 \end{equation}
 where the variable $\Theta$ represents an offset parameter that can be used
-to control the decay of the learning rate. This dependency satisfies the
-criteria for convergence of the Q-matrix, but is designed to decay slowly so
-that we continue to have a sizable learning rate even after several hundred
-transitions have been observed by the smartcab.
+to control the decay of the learning rate, and the variable $t$ is the total
+number of transitions seen by the agent over its entire lifetime (not just on
+one trial). This dependency satisfies the criteria for convergence of the
+Q-matrix, but is designed to decay slowly so that we continue to have a sizable
+learning rate even after several hundred transitions have been observed by the
+smartcab.
 
 \subsection{Exploration versus exploitation}
 
-To simplify the parameter space for Q-learning, the \verb"epsilon" exploration 
-probability is set to be equal to the learning rate, except scaled down by a 
-parameter which we called $S$:
+For the exploration probability, \verb"epsilon", I also chose a $1/x$
+decay
 \begin{equation}
-    \epsilon_{t} = \alpha_{t} / S
+    \epsilon_{T} = \epsilon_{0} \Theta_{\epsilon} / (\Theta_{\epsilon} + T)
 \end{equation}
+but in this case the progress variable $T$ is defined as the total number
+of successful trips the agent has completed.  I incorporated this definition
+based on the helpful comments from my first project review.
+
 
 \subsection{Summary of Q-learning parameters}
 
@@ -219,9 +237,11 @@ were picked for the first implementation of the Q-learning algorithm:
 
 \item Learning rate starting value ($\alpha_{0}=0.1$)
 
-\item Learning rate offset parameter ($\Theta=10^{4}$)
+\item Learning rate decay offset parameter ($\Theta=10^{4}$)
 
-\item Epsilon scale down factor ($S=10$)
+\item Exploration rate starting value ($\epsilon_{0}=0.2$)
+
+\item Exploration rate decay offset parameter ($\Theta_{\epsilon}=3$)
 \end{itemize}
 
 \vspace{1em} \noindent Optional:\textit{What changes do you notice in the
@@ -235,6 +255,45 @@ is learning and the Q matrix is only starting to converge. But after only a
 handful of trials the smartcab has seen enough transitions and has learned how
 to get to the destination while obeying traffic rules. 
 
+I ran the simulation five times (100 trials each time) with the $Q$ learning
+parameters outlined in the previous section. 
+
+\begin{table}
+\scriptsize
+\begin{tabular}{rrrrrrr}
+\hline
+$\alpha_0$ &    $\Theta$ &  $\epsilon_0$ &  $\Theta_\epsilon$ &  success\_rate &  penalty\_rate &  objective \\
+\hline
+0.1 &  10000.0 &        0.2 &                  3 &           1.0 &      0.046174 &   0.907 \\
+0.1 &  10000.0 &        0.2 &                  3 &           1.0 &      0.078642 &   0.842 \\
+0.1 &  10000.0 &        0.2 &                  3 &          0.97 &      0.070211 &   0.829 \\
+0.1 &  10000.0 &        0.2 &                  3 &          0.98 &      0.052143 &   0.875 \\
+0.1 &  10000.0 &        0.2 &                  3 &          0.98 &      0.068798 &   0.842 \\
+\hline
+\end{tabular}
+    \vspace{1em}
+\caption{Results for initial values of Q-learning parameters.}
+    \label{tab:00}
+\end{table}
+
+The results of these five runs 
+are shown in Table~\ref{tab:00}, where the performance of the smartcab is
+quantified using the following parameters:
+\begin{itemize}
+\item \textbf{success\_rate}: This is the number of successful trips divided
+    by the number of trials.
+\item \textbf{penalty\_rate}: This is the number of times a negative reward was
+    received, divided by the total number of transitions seen by the agent.
+\item \textbf{objective}:  This is a combination of the success rate and the
+    penalty rate defined as
+\begin{equation}
+    \mathrm{objective} = \mathrm{success\,rate} - 2\times\mathrm{penalty\,rate}
+\end{equation}
+  The objective is defined as a way to combine success rate and penalty rate
+        into a single metric, while giving more importance to the penalty rate.
+        In this way we will give some more priority to the smartcab's
+        compliance with traffic rules.
+\end{itemize}
 
 \section{Improve the Q-Learning Driving Agent}
 
@@ -253,50 +312,48 @@ affected via the learning rate starting value.
 The remaining parameters will be varied as follows:
 
 \begin{itemize}
-    \item $\alpha_{0}$:  [0.05, 0.1, 0.5, 1, 2]
+    \item $\alpha_{0}$:  [0.05, 0.1, 1, 2]
 
-    \item $\Theta$:  [$10^2$, $10^4$, $10^6$]
+    \item $\Theta$:  [$10$, $10^4$, $10^7$]
 
-    \item $S$: [1, 10, 100]
+    \item $\epsilon_{0}$: [0.02, 0.2, 0.6]
+
+    \item $\Theta_{\epsilon}$: [1, 3, 10]
 \end{itemize}
 
-The above parameter space gives us a total of $5*3*3 = 45$ parameter
+The above parameter space gives us a total of $81$ parameter
 combinations that can be tried out to improve the smartcab performance. 
 
-The objective function that will be used to evaluate the smartcab performance
-will be a combination of the success rate and the total number of negative 
-rewards (penalties) received over the 100 simulation trials.  Giving a factor
-of 2 more importance to the penalty rate, I defined the following objective
-function:
-\begin{equation}
-    \mathrm{objective} = \mathrm{success\,rate} - 2\times\mathrm{penalty\,rate})
-\end{equation}
+As was explained in the previous section, the objective function that will be
+used to evaluate the smartcab performance will be a combination of the success
+rate and the total number of negative rewards that gives a factor of 2 more
+importance to the penalty rate.
 
 \begin{table}
 \scriptsize
 Top 5: \newline
-\begin{tabular}{rrrrrr}
+\begin{tabular}{rrrrrrr}
 \hline
- alpha\_0 &      theta &    S &  success\_rate &  penalty\_rate &  objective \\
+$\alpha_0$ &    $\Theta$ &  $\epsilon_0$ &  $\Theta_\epsilon$ &  success\_rate &  penalty\_rate &  objective \\
 \hline
-     1.0 &      100.0 &  100 &          1.00 &      0.024283 &   0.951435 \\
-     0.5 &      100.0 &  100 &          0.99 &      0.021792 &   0.946416 \\
-     1.0 &    10000.0 &  100 &          1.00 &      0.027821 &   0.944359 \\
-     1.0 &  1000000.0 &  100 &          1.00 &      0.028488 &   0.943024 \\
-     0.5 &  1000000.0 &  100 &          0.99 &      0.026886 &   0.936229 \\
+     1.0 &     10000.0 &       0.02 &                  3 &          1.00 &      0.020393 &   0.959215 \\
+     1.0 &     10000.0 &       0.02 &                 10 &          1.00 &      0.020424 &   0.959152 \\
+     1.0 &  10000000.0 &       0.02 &                  1 &          0.99 &      0.021739 &   0.946522 \\
+     1.0 &     10000.0 &       0.02 &                  1 &          0.99 &      0.023207 &   0.943586 \\
+     1.0 &  10000000.0 &       0.02 &                  3 &          0.99 &      0.025496 &   0.939008 \\
 \hline
 \end{tabular}
 
 \vspace{1em} Worse 5: \newline
-\begin{tabular}{rrrrrr}
+\begin{tabular}{rrrrrrr}
 \hline
- alpha\_0 &      theta &  S &  success\_rate &  penalty\_rate &  objective \\
+$\alpha_0$ &    $\Theta$ &  $\epsilon_0$ &  $\Theta_\epsilon$ &  success\_rate &  penalty\_rate &  objective \\
 \hline
-     1.0 &  1000000.0 &  1 &      0.220000 &      0.559863 &  -0.899726 \\
-     2.0 &  1000000.0 &  1 &      0.210000 &      0.558591 &  -0.907182 \\
-     1.0 &    10000.0 &  1 &      0.190000 &      0.560738 &  -0.931475 \\
-     2.0 &    10000.0 &  1 &      0.222222 &      0.582402 &  -0.942581 \\
-     2.0 &      100.0 &  1 &      0.160000 &      0.572389 &  -0.984779 \\
+    0.10 &    1.0 &       0.60 &                 10 &          0.18 &      0.618148 &  -1.056296 \\
+    2.00 &    1.0 &       0.02 &                  3 &          0.01 &      0.625455 &  -1.240909 \\
+    0.10 &    1.0 &       0.20 &                  1 &          0.21 &      0.727784 &  -1.245568 \\
+    0.05 &    1.0 &       0.02 &                  1 &          0.04 &      0.686051 &  -1.332101 \\
+    0.05 &    1.0 &       0.60 &                 10 &          0.13 &      0.745933 &  -1.361866 \\
 \hline
 \end{tabular}
 \vspace{2em}
@@ -308,30 +365,31 @@ Top 5: \newline
 \begin{table}
 \scriptsize
 Top 5: \newline
-\begin{tabular}{rrrrrr}
+\begin{tabular}{rrrrrrr}
 \hline
- alpha\_0 &      theta &    S &  success\_rate &  penalty\_rate &  objective \\
+$\alpha_0$ &    $\Theta$ &  $\epsilon_0$ &  $\Theta_\epsilon$ &  success\_rate &  penalty\_rate &  objective \\
 \hline
-     0.5 &      100.0 &  100 &          0.99 &      0.025868 &   0.938263 \\
-     1.0 &  1000000.0 &  100 &          1.00 &      0.031155 &   0.937690 \\
-     0.5 &    10000.0 &  100 &          0.98 &      0.025758 &   0.928485 \\
-     1.0 &    10000.0 &  100 &          0.98 &      0.028256 &   0.923487 \\
-     0.5 &  1000000.0 &  100 &          0.98 &      0.035186 &   0.909627 \\
+     1.0 &     10000.0 &       0.02 &                  1 &           1.0 &      0.021168 &   0.957664 \\
+     1.0 &  10000000.0 &       0.02 &                  3 &           1.0 &      0.021399 &   0.957202 \\
+     1.0 &  10000000.0 &       0.02 &                  1 &           1.0 &      0.023392 &   0.953216 \\
+     1.0 &     10000.0 &       0.02 &                 10 &           1.0 &      0.024133 &   0.951735 \\
+     1.0 &  10000000.0 &       0.20 &                  3 &           1.0 &      0.029412 &   0.941176 \\
 \hline
 \end{tabular}
 
 \vspace{1em} Worse 5: \newline
-\begin{tabular}{rrrrrr}
+\begin{tabular}{rrrrrrr}
 \hline
- alpha\_0 &      theta &  S &  success\_rate &  penalty\_rate &  objective \\
+$\alpha_0$ &    $\Theta$ &  $\epsilon_0$ &  $\Theta_\epsilon$ &  success\_rate &  penalty\_rate &  objective \\
 \hline
-     1.0 &  1000000.0 &  1 &      0.270000 &      0.578393 &  -0.886786 \\
-     1.0 &    10000.0 &  1 &      0.250000 &      0.569881 &  -0.889762 \\
-     2.0 &      100.0 &  1 &      0.230000 &      0.582621 &  -0.935241 \\
-     2.0 &    10000.0 &  1 &      0.171717 &      0.569337 &  -0.966958 \\
-     2.0 &  1000000.0 &  1 &      0.160000 &      0.579194 &  -0.998387 \\
+    0.05 &    1.0 &       0.02 &                  3 &          0.07 &      0.619638 &  -1.169277 \\
+    0.05 &    1.0 &       0.60 &                 10 &          0.19 &      0.730419 &  -1.270838 \\
+    2.00 &    1.0 &       0.02 &                 10 &          0.01 &      0.662504 &  -1.315008 \\
+    2.00 &    1.0 &       0.02 &                  3 &          0.08 &      0.856231 &  -1.632462 \\
+    0.10 &    1.0 &       0.02 &                  1 &          0.03 &      0.946412 &  -1.862824 \\
 \hline
 \end{tabular}
+
 \vspace{2em}
 \caption{Realization number 2.}
 \label{tab:02}
@@ -341,28 +399,28 @@ Top 5: \newline
 \begin{table}
 \scriptsize
 Top 5: \newline
-\begin{tabular}{rrrrrr}
+\begin{tabular}{rrrrrrr}
 \hline
- alpha\_0 &      theta &    S &  success\_rate &  penalty\_rate &  objective \\
+$\alpha_0$ &    $\Theta$ &  $\epsilon_0$ &  $\Theta_\epsilon$ &  success\_rate &  penalty\_rate &  objective \\
 \hline
-     1.0 &    10000.0 &  100 &          1.00 &      0.028932 &   0.942136 \\
-     0.5 &    10000.0 &  100 &          0.99 &      0.026377 &   0.937246 \\
-     0.5 &  1000000.0 &  100 &          0.99 &      0.032951 &   0.924097 \\
-     0.5 &      100.0 &  100 &          0.97 &      0.024353 &   0.921294 \\
-     1.0 &      100.0 &  100 &          0.99 &      0.034647 &   0.920707 \\
+     1.0 &     10000.0 &       0.02 &                  1 &          1.00 &      0.020930 &   0.958140 \\
+     1.0 &     10000.0 &       0.20 &                  3 &          1.00 &      0.021676 &   0.956647 \\
+     1.0 &  10000000.0 &       0.02 &                  3 &          1.00 &      0.028810 &   0.942381 \\
+     1.0 &  10000000.0 &       0.02 &                  1 &          0.99 &      0.025037 &   0.939926 \\
+     1.0 &     10000.0 &       0.02 &                 10 &          0.99 &      0.027734 &   0.934532 \\
 \hline
 \end{tabular}
 
 \vspace{1em} Worse 5: \newline
-\begin{tabular}{rrrrrr}
+\begin{tabular}{rrrrrrr}
 \hline
- alpha\_0 &      theta &  S &  success\_rate &  penalty\_rate &  objective \\
+$\alpha_0$ &    $\Theta$ &  $\epsilon_0$ &  $\Theta_\epsilon$ &  success\_rate &  penalty\_rate &  objective \\
 \hline
-     1.0 &  1000000.0 &  1 &      0.242424 &      0.563698 &  -0.884971 \\
-     2.0 &      100.0 &  1 &      0.230000 &      0.564867 &  -0.899734 \\
-     2.0 &  1000000.0 &  1 &      0.210000 &      0.573132 &  -0.936264 \\
-     2.0 &    10000.0 &  1 &      0.190000 &      0.572574 &  -0.955149 \\
-     1.0 &    10000.0 &  1 &      0.210000 &      0.586822 &  -0.963644 \\
+     0.1 &    1.0 &       0.60 &                  3 &      0.090000 &      0.586850 &  -1.083700 \\
+     2.0 &    1.0 &       0.02 &                 10 &      0.070000 &      0.604925 &  -1.139851 \\
+     2.0 &    1.0 &       0.60 &                 10 &      0.111111 &      0.695170 &  -1.279229 \\
+     2.0 &    1.0 &       0.60 &                  1 &      0.070000 &      0.742257 &  -1.414514 \\
+     2.0 &    1.0 &       0.60 &                  3 &      0.100000 &      0.858675 &  -1.617350 \\
 \hline
 \end{tabular}
 \vspace{2em}
@@ -371,66 +429,37 @@ Top 5: \newline
 \end{table}
 
 
-\begin{table}
-\scriptsize
-Top 5: \newline
-\begin{tabular}{rrrrrr}
-\hline
- alpha\_0 &      theta &    S &  success\_rate &  penalty\_rate &  objective \\
-\hline
-     0.5 &    10000.0 &  100 &          1.00 &      0.030158 &   0.939685 \\
-     1.0 &  1000000.0 &  100 &          1.00 &      0.031939 &   0.936122 \\
-     1.0 &      100.0 &  100 &          0.99 &      0.027437 &   0.935126 \\
-     0.5 &  1000000.0 &  100 &          0.99 &      0.028593 &   0.932814 \\
-     1.0 &    10000.0 &  100 &          0.99 &      0.031019 &   0.927962 \\
-\hline
-\end{tabular}
-
-\vspace{1em} Worse 5: \newline
-\begin{tabular}{rrrrrr}
-\hline
- alpha\_0 &      theta &  S &  success\_rate &  penalty\_rate &  objective \\
-\hline
-     1.0 &  1000000.0 &  1 &      0.190000 &      0.570755 &  -0.951509 \\
-     2.0 &  1000000.0 &  1 &      0.210000 &      0.586322 &  -0.962643 \\
-     2.0 &    10000.0 &  1 &      0.170000 &      0.567735 &  -0.965470 \\
-     1.0 &    10000.0 &  1 &      0.170000 &      0.578001 &  -0.986001 \\
-     2.0 &      100.0 &  1 &      0.141414 &      0.585741 &  -1.030068 \\
-\hline
-\end{tabular}
-\vspace{2em}
-\caption{Realization number 4.}
-\label{tab:04}
-\end{table}
-
-
-In tables~\ref{tab:01} to~\ref{tab:04}, we show the top 5 and worse 5 parameter
-combinations for four runs of the simulation.  The following conclusions can
+In tables~\ref{tab:01} to~\ref{tab:03}, we show the top 5 and worse 5 parameter
+combinations for three runs of the grid search.  The following conclusions can
 be made:
 \begin{itemize}
-\item Having a large desire for exploration (low value of $S$) hurts the
-success rate for all values of the other parameters. In fact, all of the 5
-worse results have $S=1$, and all of the top 5 results have $S=10$.  
+\item Optimizing the Q-learning parameters we can achieve a nearly perfect
+(>99\%) success rate! 
 
-\item The value of $\Theta$ is not very important as long as the value of
-$\alpha_0$ is 0.5 or 1.0. 
+\item The objective function is optimized for small initial values of the
+exploration rate ($\epsilon_{0}=0.02$ seems to be the best).  This has to do
+with the fact that there is already some randomness built into the Q-matrix
+from the start due to our choice of initialization. 
 
-\item It seems like the sweet spot for the value of $\alpha_{0}$ is between 0.5
-and 1.0.  This makes sense if we keep in mind our random initialization of the
+\item The value of $\Theta$ for the optimal runs indicates that it is best for
+the learning agent to keep a sizable learning rate for a large number of 
+transitions.  
+
+\item It seems like the sweet spot for the value of $\alpha_{0}$ is 1.0.  
+This makes sense if we keep in mind our random initialization of the
 Q-matrix, with random values in the range [0, 1].  The random initialization
 range will be tightly coupled with the scale of the rewards and the value of
 $\alpha_0$. 
 
-\item For our initial Q-learning parameters, $\alpha_{0} = 0.1$, $\Theta =
-10^{4}$ and $S=10$, the success rate is 98\% on average, and the penalty rate
-is approximately 5\% on the average.  After the grid search we see that by optimal choice of the
-Q-learning parameters this can be boosted up to nearly 100\% success rate and
-approximately 3\% penalty rate.
+\item For our initial Q-learning parameters the success rate is 98\% on
+average, and the penalty rate is approximately 6\% on the average.  After the
+grid search we see that by optimal choice of the Q-learning parameters this can
+be boosted up to nearly 100\% success rate and a penalty rate as low as 2\%. 
 
 \end{itemize}
  
 
-\vspace{1em} \noindent Question:\textit{Does your agent get close to finding an
+\vspace{1em} \noindent Q: \textit{Does your agent get close to finding an
 optimal policy, i.e.\ reach the destination in the minimum possible time, and
 not incur any penalties? How would you describe an optimal policy for this
 problem?}
@@ -449,12 +478,74 @@ very costly to commit a traffic violation, the weight given to the penalty
 rate could be set to an even higher value. 
 
 I do believe that the smartcab could do better in terms of penalty rate, at the
-expense of missing some trip deadlines.  The best result shown so far is 3\%
+expense of missing some trip deadlines.  The best result shown so far is 2\%
 penalty rate.  I am a driver and I would not want to commit a traffic violation
 at that rate.  I think a more reasonable penalty rate that would make the
 smartcab comparable to a human driver would be around one traffic violation for
-every 1000 intersections visited, or a 0.1\% penalty rate. 
+every 10000 intersections visited, or a 0.01\% penalty rate. 
 
+To be more specific about what was learned by the agent we can go ahead and
+inspect the final values of the Q matrix for a 100-trial run of the smartcab
+simulation.  The results are shown in Table.~\ref{tab:q}.  The table rows are
+color-coded  such that if the correct action for the row state is favored it is
+green, if an incorrect action is favored it is colored red, and if there is not
+enough information in the state to make the right decision it is colored
+orange.
+
+\begin{table}
+\begin{tabular}{llllrrrr}
+\hline
+      &       &         &         &  None &  forward &  left &  right \\
+green? & car\_left & car\_oncoming & waypoint &       &          &       &        \\
+\hline
+False & False & forward & forward &  \textcolor{ForestGreen}{\textbf{0.07}} &    -0.86 & -0.92 &  -0.27 \\
+      &       &         & left &  0.15 &     \textcolor{red}{\textbf{0.35}} &  0.23 &  -0.22 \\
+      &       & left & forward &  \textcolor{ForestGreen}{\textbf{0.42}} &     0.36 &  0.02 &   0.18 \\
+      &       & right &         &  \textcolor{ForestGreen}{\textbf{0.96}} &     0.49 &  0.67 &   0.60 \\
+      &       & None &         &  \textcolor{ForestGreen}{\textbf{0.00}} &    -0.90 & -1.00 &  -0.42 \\
+      &       &         & left &  \textcolor{ForestGreen}{\textbf{0.00}} &    -0.99 & -0.91 &  -0.42 \\
+      &       &         & right &  0.05 &    -0.92 & -0.93 &   \textcolor{ForestGreen}{\textbf{2.22}} \\
+      & True  &         & forward &  \textcolor{ForestGreen}{\textbf{0.17}} &     0.15 & -0.91 &  -0.28 \\
+      &       &         & right &  0.09 &    -0.86 &  0.36 &   \textcolor{Orange}{\textbf{0.38}} \\
+True  & False & forward & forward &  \textcolor{red}{\textbf{0.61}} &     0.43 &  0.36 &  -0.40 \\
+      &       & left &         &  0.22 &     \textcolor{ForestGreen}{\textbf{2.18}} & -0.23 &  -0.24 \\
+      &       &         & right &  0.37 &     0.34 & -0.38 &   \textcolor{ForestGreen}{\textbf{0.82}} \\
+      &       & right & forward &  0.15 &    \textcolor{ForestGreen}{\textbf{1.90}} &  0.64 &   0.08 \\
+      &       & None &         &  0.22 &     \textcolor{ForestGreen}{\textbf{2.18}} & -0.24 &   0.31 \\
+      &       &         & left &  0.27 &     0.71 &  \textcolor{ForestGreen}{\textbf{2.00}} &   0.79 \\
+      &       &         & right &  0.08 &    -0.41 &  0.31 &   \textcolor{ForestGreen}{\textbf{2.22}} \\
+      & True  &         & forward &  0.00 &     \textcolor{ForestGreen}{\textbf{0.01}} & -0.27 &  -0.47 \\
+      &       &         & right &  0.01 &     0.16 &  0.75 &   \textcolor{ForestGreen}{\textbf{1.88}} \\
+\hline
+\end{tabular}
+
+\vspace{1em}
+\caption{Final Q matrix}
+\label{tab:q}
+\end{table}
+
+
+The first and most important thing to note is that our Q-matrix only has 
+17 rows in this case.  The number of possible states in the state space that we
+are considering is 48.  So there are a total of 31 states in our state space
+that we did not even see over the course of 100 trials!!  This has to do with
+the fact that we do not see states that involve other traffic very often, 
+because our simulation environment has only three dummy agents sharing the
+world with our smartcab. 
+
+Looking at the colors in Table~\ref{tab:q} we see that there are some states
+where our smartcab has not learned enough, and still continues to make
+mistakes.  The states where mistakes are made all involve other traffic, and 
+the reason the agent has not been able to learn much about those is again due
+to the fact that there are only three other agents in the environment. 
+
+
+Overall I am happy with the performance of the smartcab, however based on the
+examination of the Q-matrix I think that perhaps it could be improved if one
+would have a learning rate that depended on the specific state.  In that way
+if one stumbles later on in the simulation onto a state that is not encountered
+very often, one could give a sizable weight to the discounted reward observed
+in the transition that would follow from the unfrequently observed state. 
 
 % \bibliographystyle{IEEEtran}
 % \bibliography{bib}

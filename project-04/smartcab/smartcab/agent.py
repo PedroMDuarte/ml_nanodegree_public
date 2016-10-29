@@ -68,7 +68,7 @@ def print_qvalue_update(starting_q_value, updated_q_value):
 def make_q_matrix(actions):
     """
     We represent the Q matrix as a dict of dicts.  The keys of the top level
-    dict are states, and the values are dicts of action:Qvalue pairs:
+    dict are states, and the values are dicts of {action: Qvalue} pairs:
 
         Q = {state: {action: Qval}}
 
@@ -102,6 +102,9 @@ class RandomAgent(Agent):
         inputs = self.env.sense(self)
         deadline = self.env.get_deadline(self)
 
+        # TODO: Update state
+        self.state = self.get_state_tuple(inputs, self.next_waypoint)
+
         # TODO: Select action randomly:
         action = random.choice([None, 'forward', 'left', 'right'])
 
@@ -111,7 +114,16 @@ class RandomAgent(Agent):
         transition = print_transition(inputs, deadline, self.next_waypoint, action, reward)
         self.transitions[transition] += 1
 
-    def set_q_params(self, alpha_0, theta, s):
+    @staticmethod
+    def get_state_tuple(inputs, waypoint):
+        """Returns a tuple that represents the state given the current inputs and waypoint"""
+        is_light_green = inputs['light'] == 'green'
+        car_oncoming = inputs['oncoming']
+        car_left = inputs['left'] is not None
+        return is_light_green, waypoint, car_oncoming, car_left
+
+    def set_q_params(self, alpha_0, theta, epsilon_0, theta_exploration):
+        """The Q learning parameters are irrelevant for the RandomAgent"""
         pass
 
 
@@ -127,6 +139,8 @@ class LearningAgent(Agent):
         # TODO: Initialize any additional variables here
         self.possible_actions = [None, 'forward', 'left', 'right']
         self.Q = make_q_matrix(self.possible_actions)
+        self.total_transitions_seen = 0
+        self.total_successful_trips = 0
 
         # Q-learning parameter
         self.discount = 0.1
@@ -134,10 +148,11 @@ class LearningAgent(Agent):
         # List for collecting the results of each simulation trial
         self.simulation_results = list()
 
-    def set_q_params(self, alpha_0, theta, s):
+    def set_q_params(self, alpha_0, theta, epsilon_0, theta_exploration):
         self.alpha_0 = alpha_0
         self.theta = theta
-        self.s = s
+        self.epsilon_0 = epsilon_0
+        self.theta_exploration = theta_exploration
 
     def learning_rate(self):
         """
@@ -151,17 +166,21 @@ class LearningAgent(Agent):
         """
         starting_value = self.alpha_0
         offset = self.theta
-        return starting_value * offset / (offset + self.num_updates)
+        return starting_value * offset / (offset + self.total_transitions_seen)
 
     def epsilon(self):
         """
         Epsilon is the exploration parameter, and similar to the learning rate we
-        want it to decrease as the agent learns the driving rules. We choose the
-        exact same dependency as the learning rate, but scale it down by a factor
-        so that there is only a small chance of taking a random action.
+        want it to decrease as the agent learns the driving rules. As suggested
+        by the Udacity reviewer, I will choose the number of successful trips so
+        far as a proxy for the amount that the agent has learned.
+
+        The actual functional dependency on the proxy variable will be proportional
+        to 1/t
         """
-        scale_down = self.s
-        return self.learning_rate() / scale_down
+        starting_value = self.epsilon_0
+        offset = self.theta_exploration
+        return starting_value * offset / (offset + self.total_successful_trips)
 
     def reset(self, destination=None):
         self.planner.route_to(destination)
@@ -188,35 +207,45 @@ class LearningAgent(Agent):
         deadline = self.env.get_deadline(self)
 
         # TODO: Update state
-        state = self.get_state_tuple(inputs, self.next_waypoint)
+        self.state = self.get_state_tuple(inputs, self.next_waypoint)
 
         # TODO: Select action according to your policy
         print_update_header(self.destination, self.env.agent_states[self]['location'])
-        print_state_qvals(self.Q, state)
-        action = self.argmax_q(state)
+        print_state_qvals(self.Q, self.state)
+        action = self.argmax_q(self.state)
 
         # Execute action and get reward
         reward = self.env.act(self, action)
         print_transition(inputs, deadline, self.next_waypoint, action, reward)
+        is_successful = self.env.done
 
         # TODO: Learn policy based on state, action, reward
-        new_state = self.get_state_tuple(self.env.sense(self), self.planner.next_waypoint())
-        discounted_reward = reward + self.discount * self.max_q(new_state)
+        if not is_successful:
+            # We only perform a Q-learning update if the final state of the transition is not
+            # the "done" state.  The reason for this is that the "done" state does not have a
+            # well defined waypoint (waypoint is None), so that final state is not consistent
+            # with our Q matrix states.
+            new_state = self.get_state_tuple(self.env.sense(self), self.planner.next_waypoint())
+            discounted_reward = reward + self.discount * self.max_q(new_state)
 
-        starting_q_value = self.Q[state][action]
-        updated_q_value = ((1 - self.learning_rate()) * starting_q_value
-                           + self.learning_rate() * discounted_reward)
-        self.Q[state][action] = updated_q_value
-        print_qvalue_update(starting_q_value, updated_q_value)
+            starting_q_value = self.Q[self.state][action]
+            updated_q_value = ((1 - self.learning_rate()) * starting_q_value
+                               + self.learning_rate() * discounted_reward)
+            self.Q[self.state][action] = updated_q_value
+            print_qvalue_update(starting_q_value, updated_q_value)
 
         # Update monitoring variables
         self.total_reward += reward
         self.num_updates += 1
+        self.total_transitions_seen += 1
         if inputs['light'] == 'red':
             self.num_red_lights += 1
         if inputs['light'] == 'green' or (inputs['light'] == 'red' and self.next_waypoint == 'right'):
             self.num_can_move += 1
         self.rewards_counter[reward] += 1
+
+        if is_successful:
+            self.total_successful_trips += 1
 
         is_run_finished = self.env.done or deadline <= 0
         if is_run_finished:
@@ -238,11 +267,9 @@ class LearningAgent(Agent):
     def get_state_tuple(inputs, waypoint):
         """Returns a tuple that represents the state given the current inputs and waypoint"""
         is_light_green = inputs['light'] == 'green'
-        car_oncoming_turning = inputs['oncoming'] == 'left' or inputs['oncoming'] == 'right'
-        car_oncoming = inputs['oncoming'] is not None
+        car_oncoming = inputs['oncoming']
         car_left = inputs['left'] is not None
-        car_right = inputs['right'] is not None
-        return is_light_green, waypoint, car_oncoming_turning, car_oncoming, car_left, car_right
+        return is_light_green, waypoint, car_oncoming, car_left
 
     def argmax_q(self, state):
         """Returns the action that maximizes Q for the given state"""
@@ -268,27 +295,49 @@ class LearningAgent(Agent):
 # Run simulations
 # ----
 
-def run():
+def run(agent_class):
     """Run the agent for a finite number of trials."""
 
-    # Iterate over the agent Q-learning paramters:
+    # Iterate over the agent Q-learning parameters:
     grid_search_results = []
-    # for alpha_0, theta, S in itertools.product([0.05, 0.1, 0.5, 1., 2], [1e2, 1e4, 1e6], [1, 10, 100]):
-    for alpha_0, theta, S in itertools.product([0.1], [1e4], [10]):
+
+    if agent_class == RandomAgent:
+        do_search = False
+    else:
+        prompt = "Do you wish to run a full grid search (y / n): "
+        ans = raw_input(prompt)
+        while ans not in {"y", "n"}:
+            ans = raw_input(prompt)
+        do_search = ans == 'y'
+
+    if do_search:
+        grid = itertools.product([0.05, 0.1, 1., 2], [1, 1e4, 1e7], [0.02, 0.2, 0.6], [1, 3, 10])
+    else:
+        initial = itertools.product([0.1], [1e4], [0.2], [3])  # Initial values that were tried
+        optimal = itertools.product([1.0], [1e4], [0.02], [3])  # Optimal values obtained after grid search
+
+        # Select whether to run with the initial or optimal set of Q learning parameters
+        grid = optimal
+
+    for alpha_0, theta, epsilon_0, theta_exploration in grid:
         # Set up environment and agent
         e = Environment(num_dummies=3)  # create environment (also adds some dummy traffic)
-
-        agent_class = LearningAgent  # choose from: (RandomAgent, LearningAgent)
-
         a = e.create_agent(agent_class)  # create agent
-
         e.set_primary_agent(a, enforce_deadline=True)  # specify agent to track
         # NOTE: You can set enforce_deadline=False while debugging to allow longer trials
 
-        a.set_q_params(alpha_0, theta, S)
+        # Set the Q-learning parameters for the agent
+        a.set_q_params(alpha_0, theta, epsilon_0, theta_exploration)
 
         # Now simulate it
-        sim = Simulator(e, update_delay=0.0001, display=False)  # create simulator (uses pygame when display=True, if available)
+        if isinstance(a, RandomAgent):
+            delay = 0.5
+            display = True
+        else:
+            delay = 0.0
+            display = False
+
+        sim = Simulator(e, update_delay=delay, display=display)  # create simulator (uses pygame when display=True, if available)
         # NOTE: To speed up simulation, reduce update_delay and/or set display=False
 
         sim.run(n_trials=100)  # run for a specified number of trials
@@ -297,14 +346,15 @@ def run():
         if isinstance(a, RandomAgent):
             # If we are running with the random agent, go ahead and save all
             # of the transitions that were observed. The results can be inspected
-            # in an interactive session.
+            # later on in an interactive session.
             import pickle
             pickle.dump(a.transitions, open('random_transitions.pck', 'wb'))
-            break  # the Q-learning params have no effect on the RandomAgent, so no need to go through with the grid search.
+            import sys
+            sys.exit(0)
 
         if isinstance(a, LearningAgent):
-            # If we are running with the learning agent, print out some statistics
-            # over the total number of simulation trials.
+            # If we are running with the learning agent, collect some statistics
+            # for the current values of the Q-learning parameters
             df = pd.DataFrame(a.simulation_results)
             df = df.fillna(0.)  # Fill values for reward statistics
 
@@ -316,18 +366,21 @@ def run():
             grid_search_results.append({
                 'alpha_0': alpha_0,
                 'theta': theta,
-                'S': S,
+                'epsilon_0': epsilon_0,
+                'theta_exploration': theta_exploration,
                 'success_rate': success_rate,
                 'penalty_rate': penalty_rate,
                 'objective': success_rate - 2. * penalty_rate
             })
 
-    order = ['alpha_0', 'theta', 'S', 'success_rate', 'penalty_rate', 'objective']
+            final_q_matrix = a.Q
+
+    order = ['alpha_0', 'theta', 'epsilon_0', 'theta_exploration', 'success_rate', 'penalty_rate', 'objective']
     grid_df = pd.DataFrame(grid_search_results).sort_values(by='objective', ascending=False)[order]
 
     import StringIO
     output = StringIO.StringIO()
-
+    print "GRID SEARCH REPORT:\n"
     output.write("Top 5: \\newline\n")
     grid_df.head().to_latex(output, index=False)
     output.write("\\vspace{1em} Worse 5: \\newline\n")
@@ -335,5 +388,33 @@ def run():
     contents = output.getvalue()
     print contents.replace('toprule', 'hline').replace('midrule', 'hline').replace('bottomrule', 'hline')
 
+    if not do_search:
+        final_q_df = list()
+        for k, v in final_q_matrix.items():
+            v = v.copy()
+            v.update({'green?': k[0], 'waypoint': k[1], 'car_oncoming': k[2], 'car_left': k[3]})
+            none_val = v.pop(None)
+            v['None'] = none_val
+            final_q_df.append(v)
+
+        print "\n\nFINAL Q MATRIX:"
+        state_vars = ['green?', 'car_left', 'car_oncoming', 'waypoint']
+        final_q_df = pd.DataFrame(final_q_df).sort_values(by=state_vars).set_index(state_vars, drop=True).round(2)
+        print final_q_df
+        print
+        output = StringIO.StringIO()
+        final_q_df.to_latex(output, index=True)
+        print output.getvalue().replace('toprule', 'hline').replace('midrule', 'hline').replace('bottomrule', 'hline')
+
 if __name__ == '__main__':
-    run()
+
+    prompt = "Please enter the name of the agent class you wish to use (RandomAgent, LearningAgent): "
+    ans = raw_input(prompt)
+    while ans not in {"RandomAgent", "LearningAgent"}:
+        ans = raw_input(prompt)
+
+    if ans == "RandomAgent":
+        run(RandomAgent)
+
+    else:
+        run(LearningAgent)
